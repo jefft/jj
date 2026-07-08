@@ -1312,10 +1312,26 @@ impl MutableRepo {
                         dependents.push(parent);
                         continue;
                     };
-                    if let Some(rewrite) = self.parent_mapping.get(parent.id()) {
-                        for target in rewrite.new_parent_ids() {
-                            if to_visit_set.contains(target) && !visited.contains(target) {
-                                dependents.push(store.get_commit_async(target).await);
+                    if self.parent_mapping.contains_key(parent.id()) {
+                        // The parent was rewritten or abandoned. Follow the
+                        // mapping transitively, since a rewrite target may
+                        // itself have been rewritten in this transaction (e.g.
+                        // `Abandoned` records point at the abandoned commit's
+                        // original parents). Any final replacement that is in
+                        // `to_visit_set` must be rebased before this commit.
+                        let mut queue: Vec<CommitId> = vec![parent.id().clone()];
+                        let mut seen: HashSet<CommitId> = queue.iter().cloned().collect();
+                        while let Some(id) = queue.pop() {
+                            let Some(rewrite) = self.parent_mapping.get(&id) else {
+                                if to_visit_set.contains(&id) && !visited.contains(&id) {
+                                    dependents.push(store.get_commit_async(&id).await);
+                                }
+                                continue;
+                            };
+                            for target in rewrite.new_parent_ids() {
+                                if seen.insert(target.clone()) {
+                                    queue.push(target.clone());
+                                }
                             }
                         }
                     }
